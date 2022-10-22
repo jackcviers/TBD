@@ -54,6 +54,12 @@ lazy val `cats-scala-fx` = (project in file("./cats-scalafx"))
   )
   .dependsOn(`scala-fx`)
 
+lazy val `circe-fx` = (project in file("./circe-scalafx"))
+  .settings(
+    circeScalaFXSettings
+  )
+  .dependsOn(`scala-fx`)
+
 lazy val `scalike-jdbc-scala-fx` = project
   .dependsOn(`scala-fx`, `munit-scala-fx` % "test -> compile")
   .settings(publish / skip := true)
@@ -104,6 +110,15 @@ lazy val munitScalaFXSettings = Defaults.itSettings ++ Seq(
     junitInterface
   )
 ) ++ commonSettings
+
+lazy val circeScalaFXSettings = Seq(
+  classLoaderLayeringStrategy := ClassLoaderLayeringStrategy.Flat,
+  javaOptions ++= javaOptionsSettings,
+  autoAPIMappings := true,
+  libraryDependencies ++= Seq(
+    scalacheck % Test
+  )
+)
 
 lazy val catsScalaFXSettings = Seq(
   classLoaderLayeringStrategy := ClassLoaderLayeringStrategy.Flat,
