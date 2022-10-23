@@ -26,7 +26,8 @@ lazy val root =
     `http-scala-fx`,
     documentation,
     `sttp-scala-fx`,
-    `java-net-multipart-body-publisher`
+    `java-net-multipart-body-publisher`,
+    `circe-fx`
   )
 
 lazy val `scala-fx` = project.settings(scalafxSettings: _*)
@@ -54,11 +55,10 @@ lazy val `cats-scala-fx` = (project in file("./cats-scalafx"))
   )
   .dependsOn(`scala-fx`)
 
-lazy val `circe-fx` = (project in file("./circe-scalafx"))
-  .settings(
-    circeScalaFXSettings
-  )
-  .dependsOn(`scala-fx`)
+lazy val `circe-fx` =
+  (project in file("./circe-scalafx"))
+    .settings(circeScalaFXSettings)
+    .dependsOn(`scala-fx`, `munit-scala-fx` % "test -> compile")
 
 lazy val `scalike-jdbc-scala-fx` = project
   .dependsOn(`scala-fx`, `munit-scala-fx` % "test -> compile")
@@ -116,6 +116,9 @@ lazy val circeScalaFXSettings = Seq(
   javaOptions ++= javaOptionsSettings,
   autoAPIMappings := true,
   libraryDependencies ++= Seq(
+    circeCore,
+    circeGeneric,
+    circeParser,
     scalacheck % Test
   )
 )
