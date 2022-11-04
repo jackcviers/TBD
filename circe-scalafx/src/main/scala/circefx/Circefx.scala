@@ -18,7 +18,7 @@ def runProgram =
     p.decode(s).bind
 
   def transform[E, A](s: ValidatedNel[E, A]): Either[E, A] =
-    s.fold((e: NonEmptyList[E]) => Left(e.fold(???)), (a: A) => Right(a))
+    s.fold((e: NonEmptyList[E]) => Left(e.fold(identity)), (a: A) => Right(a))
 
   def parserTest2[A](s: String)(using p: Parser, cx: Control[Error], d: Decoder[A]) =
     transform(p.decodeAccumulating(s)).bind
