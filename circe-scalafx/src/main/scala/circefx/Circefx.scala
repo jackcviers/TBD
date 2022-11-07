@@ -2,25 +2,26 @@ package circefx
 
 import fx.*
 import fx.Control
+import fx.Control.*
 import io.circe.*
 import cats.*
 import cats.data.*
 import cats.implicits.*
 
-class Circefx
+import Continuation.*
 
-def runProgram =
-  // TODO test with a Json
+object Circefx:
   def decodeTest[A](c: io.circe.HCursor)(using d: Decoder[A], cx: Control[DecodingFailure]): A =
     d(c).bind
 
-  def parserTest[A](s: String)(using p: Parser, cx: Control[Error], d: Decoder[A]) =
+  def parsing[A](s: String)(using p: Parser, cx: Control[Error], d: Decoder[A]): A =
     p.decode(s).bind
 
-  def transform[E, A](s: ValidatedNel[E, A]): Either[E, A] =
-    s.fold((e: NonEmptyList[E]) => Left(e.fold(???)), (a: A) => Right(a))
+  object extensionTest:
+    def foldNonEmpty[E, A](x: NonEmptyList[E])(using control: Control[NonEmptyList[E]]): A =
+      // summon[Control[NonEmptyList[E]]]
+      ???
 
-  def parserTest2[A](s: String)(using p: Parser, cx: Control[Error], d: Decoder[A]) =
-    transform(p.decodeAccumulating(s)).bind
-
-  val test: DecodingFailure | String = run(decodeTest[String](???))
+    extension [E, A](s: ValidatedNel[E, A])
+      def bind(using Control[NonEmptyList[E]]): A =
+        s.fold(foldNonEmpty, identity)

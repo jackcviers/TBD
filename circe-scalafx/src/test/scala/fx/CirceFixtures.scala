@@ -10,10 +10,15 @@ trait CirceFixtures { self: ScalaFXSuite =>
   )
 
   val stringFixture = FunFixture(
-    setup = _ => "Esteban",
+    setup = _ => "test",
     teardown = _ => ()
   )
 
   val combined: FunFixture[(Int, String)] =
     FunFixture.map2(intFixture, stringFixture)
+
+  val jsonError = FunFixture(
+    setup = _ => "error Json",
+    teardown = _ => ()
+  )
 }
