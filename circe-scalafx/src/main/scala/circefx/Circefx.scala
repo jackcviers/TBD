@@ -1,13 +1,11 @@
 package circefx
 
-import fx.*
-import fx.Control
-import fx.Control.*
+import fx._
 import io.circe._
 import io.circe.parser._
-import cats.*
-import cats.data.*
-import cats.implicits.*
+import cats._
+import cats.data._
+import cats.implicits._
 
 object Circefx:
   def decodeTest[A](c: io.circe.HCursor)(using d: Decoder[A], cx: Control[DecodingFailure]): A =
