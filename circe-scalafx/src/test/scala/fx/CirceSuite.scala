@@ -6,9 +6,9 @@ import java.lang.Throwable
 import fx.*
 import fx.Control
 import fx.Control.*
-import io.circe.*
-import io.circe.parser.*
-import io.circe.parser.given
+import io.circe._
+import io.circe.parser._
+import io.circe.syntax._
 import Circefx.*
 
 // import io.circe.*, io.circe.generic.auto.*, io.circe.parser.*, io.circe.syntax.*,
