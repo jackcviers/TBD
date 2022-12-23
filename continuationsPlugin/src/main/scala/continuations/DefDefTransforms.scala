@@ -28,6 +28,7 @@ import org.scalajs.ir.Trees.LabelIdent.apply
 import org.scalajs.ir.Trees.Block.apply
 import scala.Symbol.apply
 import dotty.tools.dotc.ast.Trees.Block
+import dotty.tools.dotc.quoted.reflect.FromSymbol
 
 object DefDefTransforms:
 
@@ -407,7 +408,7 @@ object DefDefTransforms:
         )
         val continuationsStateMachineConstructorMethodSymbol = Symbols.newConstructor(
           continuationsStateMachineSymbol,
-          Flags.Synthetic,
+          Synthetic,
           List(
             continuationsStateMachineConstructorMethodCompletionParamName,
             continuationsStateMachineConstructorMethodInputParamName,
@@ -485,6 +486,17 @@ object DefDefTransforms:
           EmptyTree
         )
         val paramsWithCompletion = params(tree, defDefCompletionParam.symbol)
+        val replacedDefDefSym =
+          Symbols.newSymbol(
+            tree.symbol.owner,
+            tree.name,
+            Method | NoDefaultParams | Synthetic,
+            MethodType(
+              paramsWithCompletion.flatMap(_.map(_.symbol.asTerm.name)),
+              paramsWithCompletion.flatMap(_.map(_.symbol.info)),
+              anyOrNullType)
+          )
+        replacedDefDefSym.entered
         val invokeSuspendMethod = DefDef(
           invokeSuspendSymbol.asTerm,
           invokeSuspendParmss.map(_.map(_.symbol)),
@@ -529,7 +541,7 @@ object DefDefTransforms:
                * referencing the transformed defdef to compile.
                */
               println("before bad application")
-              val x = ref(tree.symbol).appliedTo(
+              val x = ref(replacedDefDefSym).appliedTo(
                 Literal(Constant(0)),
                 continuationsStateMachineThisSymbol
                   .select(Names.termName("asInstanceOf"))
@@ -637,280 +649,284 @@ object DefDefTransforms:
             anyOrNullType,
             requiredModuleRef("continuations.Continuation.State.Suspended"),
             false))
-        val defDefCopy = cpy.DefDef(tree)(
-          paramss = paramsWithCompletion,
-          tpt = TypeTree(anyOrNullType),
-          tpd.Block(
-            List(
-              continuation1,
-              ValDef(zSym.asTerm, Literal(Constant(0))),
-              If(
-                ref(defDefCompletionParam.symbol)
-                  .select(Names.termName("isInstanceOf"))
-                  .appliedToType(continuationStateMachineClass.tpe),
-                Return(
-                  Typed(
-                    unitLiteral,
-                    TypeTree(
-                      OrType(
-                        anyOrNullType,
-                        requiredModuleRef("continuations.Continuation.State.Suspended"),
-                        false))),
-                  initialReturnLabelSymbol),
-                EmptyTree
-              ), {
-                ValDef(
-                  firstContinuation.asTerm,
-                  ref(continuation1.symbol)
-                    .select(Names.termName("asInstanceOf"))
-                    .appliedToType(continuationStateMachineClass.tpe)
-                )
-              },
-              If(
-                ref(firstContinuation)
-                  .select(Names.termName("$label"))
-                  .select(
-                    ctx
+
+        val defDefReplacement = DefDef(
+          replacedDefDefSym,
+          paramss =>
+            tpd.Block(
+              List(
+                continuation1,
+                ValDef(zSym.asTerm, Literal(Constant(0))),
+                If(
+                  ref(defDefCompletionParam.symbol)
+                    .select(Names.termName("isInstanceOf"))
+                    .appliedToType(continuationStateMachineClass.tpe),
+                  Return(
+                    Typed(
+                      unitLiteral,
+                      TypeTree(
+                        OrType(
+                          anyOrNullType,
+                          requiredModuleRef("continuations.Continuation.State.Suspended"),
+                          false))),
+                    initialReturnLabelSymbol),
+                  EmptyTree
+                ), {
+                  ValDef(
+                    firstContinuation.asTerm,
+                    ref(continuation1.symbol)
+                      .select(Names.termName("asInstanceOf"))
+                      .appliedToType(continuationStateMachineClass.tpe)
+                  )
+                },
+                If(
+                  ref(firstContinuation)
+                    .select(Names.termName("$label"))
+                    .select(
+                      ctx
+                        .definitions
+                        .IntClass
+                        .requiredMethod(nme.AND, List(ctx.definitions.IntType)))
+                    .appliedTo(
+                      ref(requiredModuleRef("scala.Int")
+                        .select(Names.termName("MinValue"))
+                        .symbol)
+                    )
+                    .select(ctx
                       .definitions
                       .IntClass
-                      .requiredMethod(nme.AND, List(ctx.definitions.IntType)))
-                  .appliedTo(
-                    ref(
-                      requiredModuleRef("scala.Int").select(Names.termName("MinValue")).symbol)
-                  )
-                  .select(ctx
-                    .definitions
-                    .IntClass
-                    .requiredMethod(nme.NE, List(ctx.definitions.IntType)))
-                  .appliedTo(Literal(Constant(0x0))),
-                tpd.Block(
-                  List(ValDef(continuation2.asTerm, ref(continuation1.symbol))),
-                  Assign(
-                    ref(continuation2.asTerm).select(Names.termName("$label")),
-                    ref(continuation2.asTerm)
-                      .select(Names.termName("$label"))
-                      .select(
-                        ctx
-                          .definitions
-                          .IntClass
-                          .requiredMethod(nme.MINUS, List(ctx.definitions.IntType)))
-                      .appliedTo(
-                        ref(requiredModuleRef("scala.Int")
-                          .select(Names.termName("MinValue"))
-                          .symbol)
-                      )
-                  )
-                ),
-                Return(
-                  Typed(
-                    unitLiteral,
-                    TypeTree(
-                      OrType(
-                        anyOrNullType,
-                        requiredModuleRef("continuations.Continuation.State.Suspended"),
-                        false))),
-                  initialReturnLabelSymbol)
-              )
-            ),
-            Labeled(
-              initialReturnLabelSymbol.asTerm,
-              Return(
-                tpd.Block(
-                  List(
-                    ValDef(
-                      resultSymbol.asTerm,
-                      ref(continuation1.symbol)
-                        .select(Names.termName("asInstanceOf"))
-                        .appliedToType(continuationStateMachineClass.tpe)
-                        .select(Names.termName("$result"))
-                    ),
-                    ValDef(orThrowSym.asTerm, Underscore(ctx.definitions.ObjectType))
-                  ),
-                  Match(
-                    Typed(
-                      ref(continuation1.symbol)
-                        .select(Names.termName("asInstanceOf"))
-                        .appliedToType(continuationStateMachineClass.tpe)
-                        .select(Names.termName("$label")),
-                      TypeTree(
-                        Types.AnnotatedType(
-                          ref(continuation1.symbol).tpe,
-                          ConcreteAnnotation(New(requiredClassRef("scala.annotation.switch")))))
-                    ),
-                    List(
-                      CaseDef(
-                        Literal(Constant(0)),
-                        EmptyTree,
-                        tpd.Block(
-                          List(
-                            ref(resultSymbol)
-                              .select(
-                                Names.termName("fold")
-                              )
-                              .appliedToType(ctx.definitions.UnitType)
-                              .appliedTo(
-                                Lambda(
-                                  MethodType
-                                    .fromSymbols(List(tSym), ctx.definitions.NothingType),
-                                  args => Throw(args.head)
-                                ),
-                                Lambda(
-                                  MethodType.fromSymbols(
-                                    List(tSuccSym),
-                                    ctx.definitions.UnitType
-                                  ),
-                                  _ => Literal(Constant(()))
-                                )
-                              ),
-                            Assign(
-                              ref(continuation1.symbol)
-                                .select(Names.termName("asInstanceOf"))
-                                .appliedToTypes(List(continuationStateMachineClass.tpe))
-                                .select(Names.termName("$input")),
-                              ref(tree.paramss.head.filter(_.name.show == "x").head.symbol)
-                            ),
-                            Assign(
-                              ref(continuation1.symbol)
-                                .select(Names.termName("asInstanceOf"))
-                                .appliedToTypes(List(continuationStateMachineClass.tpe))
-                                .select(Names.termName("$label")),
-                              Literal(Constant(1))
-                            ),
-                            ValDef(
-                              safeContinuationIntSym.asTerm,
-                              New(
-                                safeContinuationInt,
-                                List(
-                                  ref(requiredMethod("continuations.intrinsics.intercepted"))
-                                    .appliedToType(ctx.definitions.IntType)
-                                    .appliedTo(ref(defDefCompletionParam.symbol))
-                                    .appliedToNone,
-                                  ref(requiredModule(
-                                    "continuations.Continuation.State.Undecided"))
-                                )
-                              )
-                            ),
-                            ValDef(continuation3Sym.asTerm, ref(safeContinuationIntSym)),
-                            ref(continuation3Sym)
-                              .select(Names.termName("resume"))
-                              .appliedTo(ref(requiredModule("scala.util.Right"))
-                                .select(Names.termName("apply"))
-                                .appliedToTypes(
-                                  List(ctx.definitions.ThrowableType, ctx.definitions.IntType))
-                                .appliedTo(ref(
-                                  tree.paramss.head.filter(_.name.show == "x").head.symbol)
-                                  .select(
-                                    nme.Plus,
-                                    s =>
-                                      s.info.firstParamTypes.contains(ctx.definitions.IntType))
-                                  .appliedTo(Literal(Constant(1))))),
-                            ValDef(
-                              oSym.asTerm,
-                              ref(continuation3Sym.asTerm)
-                                .select(Names.termName("getOrThrow"))
-                                .appliedToNone),
-                            Assign(ref(orThrowSym), ref(oSym))
-                          ),
-                          If(
-                            ref(requiredModule("continuations.Continuation.State.Suspended"))
-                              .select(nme.Equals)
-                              .appliedTo(ref(oSym)),
-                            Return(
-                              ref(requiredModule("continuations.Continuation.State.Suspended")),
-                              tree.symbol),
-                            EmptyTree
-                          )
-                        )
-                      ),
-                      CaseDef(
-                        Literal(Constant(1)),
-                        EmptyTree,
-                        tpd.Block(
-                          List(
-                            Assign(
-                              ref(zSym.asTerm),
-                              ref(continuation1.symbol)
-                                .select(nme.asInstanceOf_)
-                                .appliedToType(continuationStateMachineClass.tpe)
-                                .select(Names.termName("$input"))
-                            ),
-                            ref(resultSymbol.asTerm)
-                              .select(Names.termName("fold"))
-                              .appliedToType(ctx.definitions.UnitType)
-                              .appliedToArgs(List(
-                                Lambda(
-                                  MethodType(
-                                    List(ctx.definitions.ThrowableType),
-                                    ctx.definitions.NothingType),
-                                  paramss => Throw(ref(paramss.head.symbol.asTerm))),
-                                Lambda(
-                                  MethodType.apply(
-                                    List(anyNullSuspendedType),
-                                    ctx.definitions.UnitType),
-                                  paramss => Literal(Constant(())))
-                              )),
-                            Assign(ref(orThrowSym), ref(resultSymbol))
-                          ),
-                          Labeled(
-                            finalLabeledReturnSym.asTerm,
-                            Return(
-                              tpd.Block(
-                                List(
-                                  ValDef(
-                                    ySymbol.asTerm,
-                                    ref(orThrowSym)
-                                      .select(nme.asInstanceOf_)
-                                      .appliedToType(ctx.definitions.IntType)
-                                  )
-                                ),
-                                ref(zSym.asTerm)
-                                  .select(
-                                    nme.Plus,
-                                    s =>
-                                      s.info.firstParamTypes.contains(ctx.definitions.IntType))
-                                  .appliedTo(ref(ySymbol.asTerm))
-                              ),
-                              tree.symbol
-                            )
-                          )
-                        )
-                      ),
-                      CaseDef(
-                        Underscore(ctx.definitions.AnyType),
-                        EmptyTree,
-                        Throw(New(
-                          ctx.definitions.IllegalArgumentExceptionType,
+                      .requiredMethod(nme.NE, List(ctx.definitions.IntType)))
+                    .appliedTo(Literal(Constant(0x0))),
+                  tpd.Block(
+                    List(ValDef(continuation2.asTerm, ref(continuation1.symbol))),
+                    Assign(
+                      ref(continuation2.asTerm).select(Names.termName("$label")),
+                      ref(continuation2.asTerm)
+                        .select(Names.termName("$label"))
+                        .select(
                           ctx
                             .definitions
-                            .IllegalArgumentExceptionType
-                            .member(nme.CONSTRUCTOR)
-                            .suchThat(_.info.firstParamTypes match {
-                              case List(pt) =>
-                                pt.isRef(defn.StringClass)
-                              case _ => false
-                            })
-                            .symbol
-                            .asTerm,
-                          List(Literal(
-                            Constant("call to 'resume' before 'invoke' with coroutine")))
-                        ))
+                            .IntClass
+                            .requiredMethod(nme.MINUS, List(ctx.definitions.IntType)))
+                        .appliedTo(
+                          ref(requiredModuleRef("scala.Int")
+                            .select(Names.termName("MinValue"))
+                            .symbol)
+                        )
+                    )
+                  ),
+                  Return(
+                    Typed(
+                      unitLiteral,
+                      TypeTree(
+                        OrType(
+                          anyOrNullType,
+                          requiredModuleRef("continuations.Continuation.State.Suspended"),
+                          false))),
+                    initialReturnLabelSymbol)
+                )
+              ),
+              Labeled(
+                initialReturnLabelSymbol.asTerm,
+                Return(
+                  tpd.Block(
+                    List(
+                      ValDef(
+                        resultSymbol.asTerm,
+                        ref(continuation1.symbol)
+                          .select(Names.termName("asInstanceOf"))
+                          .appliedToType(continuationStateMachineClass.tpe)
+                          .select(Names.termName("$result"))
+                      ),
+                      ValDef(orThrowSym.asTerm, Underscore(ctx.definitions.ObjectType))
+                    ),
+                    Match(
+                      Typed(
+                        ref(continuation1.symbol)
+                          .select(Names.termName("asInstanceOf"))
+                          .appliedToType(continuationStateMachineClass.tpe)
+                          .select(Names.termName("$label")),
+                        TypeTree(Types.AnnotatedType(
+                          ref(continuation1.symbol).tpe,
+                          ConcreteAnnotation(New(requiredClassRef("scala.annotation.switch")))))
+                      ),
+                      List(
+                        CaseDef(
+                          Literal(Constant(0)),
+                          EmptyTree,
+                          tpd.Block(
+                            List(
+                              ref(resultSymbol)
+                                .select(
+                                  Names.termName("fold")
+                                )
+                                .appliedToType(ctx.definitions.UnitType)
+                                .appliedTo(
+                                  Lambda(
+                                    MethodType
+                                      .fromSymbols(List(tSym), ctx.definitions.NothingType),
+                                    args => Throw(args.head)
+                                  ),
+                                  Lambda(
+                                    MethodType.fromSymbols(
+                                      List(tSuccSym),
+                                      ctx.definitions.UnitType
+                                    ),
+                                    _ => Literal(Constant(()))
+                                  )
+                                ),
+                              Assign(
+                                ref(continuation1.symbol)
+                                  .select(Names.termName("asInstanceOf"))
+                                  .appliedToTypes(List(continuationStateMachineClass.tpe))
+                                  .select(Names.termName("$input")),
+                                ref(paramss.head.filter(_.symbol.name.show == "x").head.symbol)
+                              ),
+                              Assign(
+                                ref(continuation1.symbol)
+                                  .select(Names.termName("asInstanceOf"))
+                                  .appliedToTypes(List(continuationStateMachineClass.tpe))
+                                  .select(Names.termName("$label")),
+                                Literal(Constant(1))
+                              ),
+                              ValDef(
+                                safeContinuationIntSym.asTerm,
+                                New(
+                                  safeContinuationInt,
+                                  List(
+                                    ref(requiredMethod("continuations.intrinsics.intercepted"))
+                                      .appliedToType(ctx.definitions.IntType)
+                                      .appliedTo(ref(defDefCompletionParam.symbol))
+                                      .appliedToNone,
+                                    ref(requiredModule(
+                                      "continuations.Continuation.State.Undecided"))
+                                  )
+                                )
+                              ),
+                              ValDef(continuation3Sym.asTerm, ref(safeContinuationIntSym)),
+                              ref(continuation3Sym)
+                                .select(Names.termName("resume"))
+                                .appliedTo(ref(requiredModule("scala.util.Right"))
+                                  .select(Names.termName("apply"))
+                                  .appliedToTypes(List(
+                                    ctx.definitions.ThrowableType,
+                                    ctx.definitions.IntType))
+                                  .appliedTo(ref(
+                                    paramss.head.filter(_.symbol.name.show == "x").head.symbol)
+                                    .select(
+                                      nme.Plus,
+                                      s =>
+                                        s.info
+                                          .firstParamTypes
+                                          .contains(ctx.definitions.IntType))
+                                    .appliedTo(Literal(Constant(1))))),
+                              ValDef(
+                                oSym.asTerm,
+                                ref(continuation3Sym.asTerm)
+                                  .select(Names.termName("getOrThrow"))
+                                  .appliedToNone),
+                              Assign(ref(orThrowSym), ref(oSym))
+                            ),
+                            If(
+                              ref(requiredModule("continuations.Continuation.State.Suspended"))
+                                .select(nme.Equals)
+                                .appliedTo(ref(oSym)),
+                              Return(
+                                ref(
+                                  requiredModule("continuations.Continuation.State.Suspended")),
+                                replacedDefDefSym),
+                              EmptyTree
+                            )
+                          )
+                        ),
+                        CaseDef(
+                          Literal(Constant(1)),
+                          EmptyTree,
+                          tpd.Block(
+                            List(
+                              Assign(
+                                ref(zSym.asTerm),
+                                ref(continuation1.symbol)
+                                  .select(nme.asInstanceOf_)
+                                  .appliedToType(continuationStateMachineClass.tpe)
+                                  .select(Names.termName("$input"))
+                              ),
+                              ref(resultSymbol.asTerm)
+                                .select(Names.termName("fold"))
+                                .appliedToType(ctx.definitions.UnitType)
+                                .appliedToArgs(List(
+                                  Lambda(
+                                    MethodType(
+                                      List(ctx.definitions.ThrowableType),
+                                      ctx.definitions.NothingType),
+                                    paramss => Throw(ref(paramss.head.symbol.asTerm))),
+                                  Lambda(
+                                    MethodType.apply(
+                                      List(anyNullSuspendedType),
+                                      ctx.definitions.UnitType),
+                                    paramss => Literal(Constant(())))
+                                )),
+                              Assign(ref(orThrowSym), ref(resultSymbol))
+                            ),
+                            Labeled(
+                              finalLabeledReturnSym.asTerm,
+                              Return(
+                                tpd.Block(
+                                  List(
+                                    ValDef(
+                                      ySymbol.asTerm,
+                                      ref(orThrowSym)
+                                        .select(nme.asInstanceOf_)
+                                        .appliedToType(ctx.definitions.IntType)
+                                    )
+                                  ),
+                                  ref(zSym.asTerm)
+                                    .select(
+                                      nme.Plus,
+                                      s =>
+                                        s.info
+                                          .firstParamTypes
+                                          .contains(ctx.definitions.IntType))
+                                    .appliedTo(ref(ySymbol.asTerm))
+                                ),
+                                replacedDefDefSym
+                              )
+                            )
+                          )
+                        ),
+                        CaseDef(
+                          Underscore(ctx.definitions.AnyType),
+                          EmptyTree,
+                          Throw(New(
+                            ctx.definitions.IllegalArgumentExceptionType,
+                            ctx
+                              .definitions
+                              .IllegalArgumentExceptionType
+                              .member(nme.CONSTRUCTOR)
+                              .suchThat(_.info.firstParamTypes match {
+                                case List(pt) =>
+                                  pt.isRef(defn.StringClass)
+                                case _ => false
+                              })
+                              .symbol
+                              .asTerm,
+                            List(Literal(
+                              Constant("call to 'resume' before 'invoke' with coroutine")))
+                          ))
+                        )
                       )
                     )
-                  )
-                ),
-                tree.symbol
+                  ),
+                  replacedDefDefSym
+                )
               )
             )
-          )
         )
-        defDefCopy.symbol.setParamssFromDefs(paramsWithCompletion)
-        defDefCopy.symbol.entered
-        println(s"defDefCopy.symbol.signature: ${defDefCopy.symbol.signature}")
-        println(s"tree: ${tree.show}")
+
         report.logWith("state machine and new defdef:")(
           Thicket(
             continuationStateMachineClass,
-            defDefCopy
+            defDefReplacement
           )
         )
       }
