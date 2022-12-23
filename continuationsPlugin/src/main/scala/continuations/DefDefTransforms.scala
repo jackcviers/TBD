@@ -367,15 +367,17 @@ object DefDefTransforms:
         val treeOwner = tree.symbol.owner
         val baseContinuationImplClazz =
           requiredClass("continuations.jvm.internal.BaseContinuationImpl")
-        val continuationsStateMachineSymbol = Symbols.newCompleteClassSymbol(
-          treeOwner,
-          Names.typeName(stateMachineContinuationClassName),
-          SyntheticArtifact,
-          List(baseContinuationImplClazz.typeRef),
-          continuationsStateMachineScope,
-          NoType,
-          treeOwner
-        )
+        val continuationsStateMachineSymbol = Symbols
+          .newCompleteClassSymbol(
+            treeOwner,
+            Names.typeName(stateMachineContinuationClassName),
+            SyntheticArtifact,
+            List(baseContinuationImplClazz.typeRef),
+            continuationsStateMachineScope,
+            NoType,
+            treeOwner
+          )
+          .entered
         val intType = ctx.definitions.IntType
         val continuationsStateMachineConstructorMethodInputParamName = Names.termName("$input")
         val memberInputSym = continuationsStateMachineScope.enter(
@@ -406,16 +408,18 @@ object DefDefTransforms:
             Mutable | Deferred,
             continuationIntTpe)
         )
-        val continuationsStateMachineConstructorMethodSymbol = Symbols.newConstructor(
-          continuationsStateMachineSymbol,
-          Synthetic,
-          List(
-            continuationsStateMachineConstructorMethodCompletionParamName,
-            continuationsStateMachineConstructorMethodInputParamName,
-            continuationsStateMachineConstructorMethodLabelParamName
-          ),
-          List(continuationIntTpe, intType, intType)
-        )
+        val continuationsStateMachineConstructorMethodSymbol = Symbols
+          .newConstructor(
+            continuationsStateMachineSymbol,
+            Synthetic,
+            List(
+              continuationsStateMachineConstructorMethodCompletionParamName,
+              continuationsStateMachineConstructorMethodInputParamName,
+              continuationsStateMachineConstructorMethodLabelParamName
+            ),
+            List(continuationIntTpe, intType, intType)
+          )
+          .entered
         val continutationsStateMachineConstructor =
           DefDef(
             continuationsStateMachineConstructorMethodSymbol,
@@ -466,37 +470,57 @@ object DefDefTransforms:
             Override | Method,
             anyOrNullType))
         val invokeSuspendResultParam = ValDef(
-          Symbols.newSymbol(
-            invokeSuspendSymbol,
-            Names.termName("result"),
-            LocalParam,
-            eitherThrowableAnyNullSuspendedType),
+          Symbols
+            .newSymbol(
+              invokeSuspendSymbol,
+              Names.termName("result"),
+              LocalParam,
+              eitherThrowableAnyNullSuspendedType)
+            .entered,
           EmptyTree)
         val invokeSuspendParmss = List(List(invokeSuspendResultParam))
         val continuationsStateMachineThisSymbol =
           ref(This(continuationsStateMachineSymbol).symbol)
         val continuationsStateMachineLabelSelect = continuationsStateMachineThisSymbol.select(
           continuationsStateMachineConstructorMethodLabelParamName)
+        val replacedDefDefSym =
+          Symbols
+            .newSymbol(
+              tree.symbol.owner,
+              tree.name,
+              Method | NoDefaultParams | Synthetic,
+              MethodType(
+                params(
+                  tree,
+                  Symbols.newSymbol(
+                    NoSymbol,
+                    Names.termName("$completion"),
+                    LocalParam | SyntheticParam,
+                    requiredClassRef(continuationFullName).appliedTo(ctx.definitions.IntType))
+                ).flatMap(_.map(_.symbol.asTerm.name)),
+                params(
+                  tree,
+                  Symbols.newSymbol(
+                    NoSymbol,
+                    Names.termName("$completion"),
+                    LocalParam | SyntheticParam,
+                    requiredClassRef(continuationFullName).appliedTo(ctx.definitions.IntType))
+                ).flatMap(_.map(_.symbol.info)),
+                anyOrNullType
+              )
+            )
+            .entered
+        val defDefCompletionParamSym = Symbols.newSymbol(
+          replacedDefDefSym,
+          Names.termName("$completion"),
+          LocalParam | SyntheticParam,
+          requiredClassRef(continuationFullName).appliedTo(ctx.definitions.IntType))
+        val paramsWithCompletion = params(tree, defDefCompletionParamSym)
+
         val defDefCompletionParam: ValDef = ValDef(
-          Symbols.newSymbol(
-            tree.symbol,
-            Names.termName("$completion"),
-            LocalParam | SyntheticParam,
-            requiredClassRef(continuationFullName).appliedTo(ctx.definitions.IntType)),
+          defDefCompletionParamSym.asTerm,
           EmptyTree
         )
-        val paramsWithCompletion = params(tree, defDefCompletionParam.symbol)
-        val replacedDefDefSym =
-          Symbols.newSymbol(
-            tree.symbol.owner,
-            tree.name,
-            Method | NoDefaultParams | Synthetic,
-            MethodType(
-              paramsWithCompletion.flatMap(_.map(_.symbol.asTerm.name)),
-              paramsWithCompletion.flatMap(_.map(_.symbol.info)),
-              anyOrNullType)
-          )
-        replacedDefDefSym.entered
         val invokeSuspendMethod = DefDef(
           invokeSuspendSymbol.asTerm,
           invokeSuspendParmss.map(_.map(_.symbol)),
@@ -518,39 +542,14 @@ object DefDefTransforms:
                   .appliedTo(
                     ref(requiredModuleRef("scala.Int").select(Names.termName("MinValue"))))
               )
-            ), {
-
-              /**
-               * So, as you can see here, in this overridden method tree for invokeSuspend, the
-               * return item is an application of the suspended method we are transforming,
-               * which hasn't yet been replaced with the TreeCopier. Even specifying that the
-               * transformed paramss must contain additional specific Continuation[Int]
-               * parameter via `disambiguate` will result in the following compilation error:
-               * ```
-               * wrong
-               * number of arguments at continuations for (x:
-               * Int)(using x$2: continuations.Suspend): Int:
-               * (continuations.compileFromString-14cb32b5-3515-4b7a-8e72-84355aa5b6c9.$package.foo5
-               * : (x: Int)(using x$2: continuations.Suspend): Int),
-               * expected: 1, found: 2
-               * ```
-               * . Our proposed solution is to enter the method symbol into the owning scope for
-               * the transformed tree in `prepareForDefDef` in the plugin phase, then to replace
-               * the copied tree, and replace its symbol with the new symbol already present in
-               * the context and owning scope. This sholud allow the overridden method transform
-               * referencing the transformed defdef to compile.
-               */
-              println("before bad application")
-              val x = ref(replacedDefDefSym).appliedTo(
-                Literal(Constant(0)),
-                continuationsStateMachineThisSymbol
-                  .select(Names.termName("asInstanceOf"))
-                  .appliedToType(
-                    requiredClassRef(continuationFullName).appliedTo(ctx.definitions.IntType))
-              )
-              println("after bad application")
-              x
-            }
+            ),
+            ref(replacedDefDefSym).appliedTo(
+              Literal(Constant(0)),
+              continuationsStateMachineThisSymbol
+                .select(Names.termName("asInstanceOf"))
+                .appliedToType(
+                  requiredClassRef(continuationFullName).appliedTo(ctx.definitions.IntType))
+            )
           )
         )
         val continuationStateMachineClass = ClassDefWithParents(
@@ -565,91 +564,118 @@ object DefDefTransforms:
                   .head
                   .filter(_.asTerm.name.show == "completion")
                   .head))),
-          List(continuationStateMachineResult)
+          List(continuationStateMachineResult, invokeSuspendMethod)
         )
         val continuationOfAny =
           requiredClassRef(continuationFullName).appliedTo(ctx.definitions.AnyType)
         val labelBuffer = labels.to(ListBuffer)
         val continuationNamesBuffer = continuationNames.to(ListBuffer)
-        val initialReturnLabelSymbol = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName(labelBuffer.remove(0)),
-          Local | Label,
-          ctx.definitions.UnitType)
+        val initialReturnLabelSymbol = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName(labelBuffer.remove(0)),
+            Local | Label,
+            ctx.definitions.UnitType)
+          .entered
         val continuation1 = ValDef(
-          Symbols.newSymbol(
-            tree.symbol,
-            Names.termName("$continuation"),
-            Local | Mutable | Synthetic,
-            continuationOfAny),
+          Symbols
+            .newSymbol(
+              replacedDefDefSym,
+              Names.termName("$continuation"),
+              Local | Mutable | Synthetic,
+              continuationOfAny)
+            .entered,
           Underscore(continuationOfAny))
-        val firstContinuation = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName(continuationNamesBuffer.remove(0)),
-          Local | Mutable | Synthetic,
-          continuationStateMachineClass.tpe)
-        val continuation2 = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName(continuationNamesBuffer.remove(0)),
-          Local | Synthetic,
-          firstContinuation.info)
-        val resultSymbol = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName("$result"),
-          Local | Mutable | Synthetic,
-          eitherThrowableAnyNullSuspendedType)
+        val firstContinuation = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName(continuationNamesBuffer.remove(0)),
+            Local | Mutable | Synthetic,
+            continuationStateMachineClass.tpe)
+          .entered
+        val continuation2 = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName(continuationNamesBuffer.remove(0)),
+            Local | Synthetic,
+            firstContinuation.info)
+          .entered
+        val resultSymbol = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName("$result"),
+            Local | Mutable | Synthetic,
+            eitherThrowableAnyNullSuspendedType)
+          .entered
         val safeContinuationInt =
           requiredClassRef("continuations.SafeContinuation").appliedTo(ctx.definitions.IntType)
-        val safeContinuationIntSym = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName("$safeContinuation"),
-          Local,
-          safeContinuationInt)
-        val continuation3Sym = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName(continuationNamesBuffer.remove(0)),
-          Local | Synthetic,
-          safeContinuationInt)
-        val oSym = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName("$o"),
-          Synthetic | Local,
-          OrType(anyOrNullType, requiredModule("Continuation.State.Suspended").info, false))
-        val orThrowSym = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName("$orThrow"),
-          Local | Mutable | Synthetic,
-          ctx.definitions.ObjectType)
-        val zSym = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName("$z"),
-          Local | Mutable | Synthetic,
-          ctx.definitions.IntType)
-        val finalLabeledReturnSym = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName(labelBuffer.remove(0)),
-          Local | Label,
-          ctx.definitions.IntType
-        )
-        val ySymbol = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName("y"),
-          Synthetic | Local,
-          ctx.definitions.IntType)
-        val tSym = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName("t"),
-          LocalParam,
-          ctx.definitions.ThrowableType)
-        val tSuccSym = Symbols.newSymbol(
-          tree.symbol,
-          Names.termName("t"),
-          LocalParam,
-          OrType(
-            anyOrNullType,
-            requiredModuleRef("continuations.Continuation.State.Suspended"),
-            false))
-
+        val safeContinuationIntSym = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName("$safeContinuation"),
+            Local,
+            safeContinuationInt)
+          .entered
+        val continuation3Sym = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName(continuationNamesBuffer.remove(0)),
+            Local | Synthetic,
+            safeContinuationInt)
+          .entered
+        val oSym = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName("$o"),
+            Synthetic | Local,
+            OrType(anyOrNullType, requiredModule("Continuation.State.Suspended").info, false))
+          .entered
+        val orThrowSym = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName("$orThrow"),
+            Local | Mutable | Synthetic,
+            ctx.definitions.ObjectType)
+          .entered
+        val zSym = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName("$z"),
+            Local | Mutable | Synthetic,
+            ctx.definitions.IntType)
+          .entered
+        val finalLabeledReturnSym = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName(labelBuffer.remove(0)),
+            Local | Label,
+            ctx.definitions.IntType
+          )
+          .entered
+        val ySymbol = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName("y"),
+            Synthetic | Local,
+            ctx.definitions.IntType)
+          .entered
+        val tSym = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName("t"),
+            LocalParam,
+            ctx.definitions.ThrowableType)
+          .entered
+        val tSuccSym = Symbols
+          .newSymbol(
+            replacedDefDefSym,
+            Names.termName("t"),
+            LocalParam,
+            OrType(
+              anyOrNullType,
+              requiredModuleRef("continuations.Continuation.State.Suspended"),
+              false))
+          .entered
         val defDefReplacement = DefDef(
           replacedDefDefSym,
           paramss =>

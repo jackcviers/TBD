@@ -981,7 +981,7 @@ class ContinuationsPluginSuite extends FunSuite, CompilerFixtures {
       // format: on
       checkContinuations(source) {
         case (tree, _) =>
-          println(tree.show)
+          println(tree)
           assertNoDiff(compileSourceIdentifier.replaceAllIn(tree.show, ""), expected)
       }
   }
