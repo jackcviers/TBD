@@ -1,5 +1,33 @@
 # scala-fx
 
+
+## BUILD NOTICE
+
+To allow main ci build (which doesn't have access to coursier), until https://github.com/sbt/sbt/issues/7157 is resolved (attached zinc PR confirmed and submitted passing all checks), the following example projects are *NOT* aggregated by the root project:
+
+* continuationsPluginExample
+* zero-arguments-no-continuation-treeview
+* zero-arguments-one-continuation-code-before-used-after
+* list-map
+* two-arguments-two-continuations
+
+These projects use `forcecompilation` to run scalac via coursier and
+ignore the standard zinc incremental build, as it is broken.
+
+You must compile these with prior to PR manually with sbt. For example, to compile continuationsPluginExample:
+
+```shell
+$ sbt
+root> continuationsPluginExample/compile
+```
+
+To run a main in these projects, you must use the `runMain` command and the Fully Qualified Name of the main you wish to run. For example, to run `examples.ThreeDependentContinuations` in the continuationsPluginExample project:
+
+```shell
+$ sbt
+root> continuationsPluginExample/runMain examples.ThreeDependentContinuations
+```
+
 ## Getting started
 
 Scala-fx is an effects library for Scala 3 that introduces structured concurrency and an abilities system to describe pure functions and programs. 
