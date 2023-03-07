@@ -21,6 +21,7 @@ abstract class SafeContinuationBase {
     volatile Object result = null;
 
     boolean CAS_RESULT(Object oldval, Object nval) {
+	// System.out.println("CAS_RESULT: " + oldval + " -> " + nval);
         return updater.compareAndSet(this, oldval, nval);
     }
 }

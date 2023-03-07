@@ -1,7 +1,9 @@
 package continuations
 
 import dotty.tools.dotc.ast.tpd.*
+import dotty.tools.dotc.core.Symbols.*
 import dotty.tools.dotc.core.Contexts.Context
+import dotty.tools.dotc.report
 
 /**
  * Extracts the trees that suspend from a tree, either assigned to a val or not.
@@ -18,11 +20,14 @@ object SuspensionPoints extends TreesChecks:
       .shallowFold(List.empty[Tree]) {
         case (suspends, tree) =>
           tree match
+            case Inlined(call @ Apply(other, args), _, _) if subtreeCallsSuspend(other) =>
+              tree :: suspends
             case vd: ValDef if subtreeCallsSuspend(vd.forceIfLazy) =>
               tree :: suspends
             case _ if treeCallsSuspend(tree) =>
               tree :: suspends
             case _ =>
+              println(s"unmatched: ${tree.show}")
               suspends
       }
       .reverse

@@ -3,6 +3,7 @@ package continuations
 import continuations.jvm.internal.ContinuationStackFrame
 
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater
+import scala.util.Properties
 
 class SafeContinuation[-T](val delegate: Continuation[T], initialResult: Any | Null)
     extends SafeContinuationBase,
@@ -13,6 +14,8 @@ class SafeContinuation[-T](val delegate: Continuation[T], initialResult: Any | N
   result = initialResult
 
   override def resume(value: Either[Throwable, T]): Unit =
+    if(Properties.envOrNone("DEBUGCONT").isDefined)
+      println(s"SafeContinuation#Resume: ${value}")
     while true do
       val cur = this.result
 
@@ -21,6 +24,8 @@ class SafeContinuation[-T](val delegate: Continuation[T], initialResult: Any | N
           return ()
       } else if (cur == Continuation.State.Suspended) {
         if (CAS_RESULT(Continuation.State.Suspended, Continuation.State.Resumed)) {
+          if(Properties.envOrNone("DEBUGCONT").isDefined)
+            println(s"delegate: $delegate")
           delegate.resume(value)
           return ()
         }

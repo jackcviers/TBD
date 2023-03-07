@@ -73,6 +73,8 @@ object DefDefTransforms extends TreesChecks:
 
     tree match
       case HasSuspensionNotInReturnedValue(_) =>
+        val ss = fetchSuspensions
+        println(s"HasSuspensionNotInReturnedValue.ss: ${ss.map(_.show)}")
         transformSuspensionsSuspendingStateMachine(fetchSuspensions, false)
       case CallsSuspendContinuation(_) =>
         fetchSuspensions match

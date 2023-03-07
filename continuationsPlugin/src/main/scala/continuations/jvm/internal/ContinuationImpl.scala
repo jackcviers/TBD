@@ -1,6 +1,7 @@
 package continuations.jvm.internal
 
 import continuations.{Continuation, ContinuationInterceptor}
+import scala.util.Properties
 
 abstract class BaseContinuationImpl(
     val completion: Continuation[Any | Null] | Null
@@ -9,6 +10,9 @@ abstract class BaseContinuationImpl(
       Serializable:
 
   final override def resume(result: Either[Throwable, Any | Null]): Unit = {
+    if(Properties.envOrNone("DEBUGCONT").isDefined)
+      println(s"BaseContinuationImpl#resume($result)")
+      println(s"this#completion($completion)")
     var current = this
     var param = result
     while true do
@@ -35,7 +39,11 @@ abstract class BaseContinuationImpl(
   protected def invokeSuspend(
       result: Either[Throwable, Any | Null | Continuation.State.Suspended.type]): Any | Null
 
-  protected def releaseIntercepted(): Unit = ()
+  protected def releaseIntercepted(): Unit =
+    if(Properties.envOrNone("DEBUGCONT").isDefined)
+      println(s"BaseContinuationImpl#releaseIntercepted()")
+      println(s"this#$completion")
+    ()
 
   def create(completion: Continuation[?]): Continuation[Unit] =
     throw UnsupportedOperationException("create(Continuation) has not been overridden")
@@ -62,6 +70,9 @@ abstract class ContinuationImpl(
   private var _intercepted: Continuation[Any | Null] = null
 
   def intercepted(): Continuation[Any | Null] =
+    if(Properties.envOrNone("DEBUGCONT").isDefined)
+      println("ContinuationImpl#intercepted")
+      println(s"this#$_intercepted")
     if (_intercepted != null) _intercepted
     else
       val interceptor = contextService[ContinuationInterceptor]()
@@ -72,6 +83,11 @@ abstract class ContinuationImpl(
       intercepted
 
   override def releaseIntercepted(): Unit =
+    if(Properties.envOrNone("DEBUGCONT").isDefined)
+      println(s"ContinuationImpl#releaseIntercepted()")
+      println(s"this#$completion")
+      println(s"this#$_intercepted")
+
     val intercepted = _intercepted
     if (intercepted != null && intercepted != this)
       val interceptor = contextService[ContinuationInterceptor]()
