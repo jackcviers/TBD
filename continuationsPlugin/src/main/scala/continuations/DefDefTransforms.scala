@@ -23,6 +23,7 @@ import dotty.tools.dotc.transform.ContextFunctionResults
 import scala.annotation.tailrec
 import scala.collection.immutable.List
 import scala.collection.mutable.ListBuffer
+import dotty.tools.dotc.util.Property.Key
 
 object DefDefTransforms extends TreesChecks:
 
@@ -117,13 +118,32 @@ object DefDefTransforms extends TreesChecks:
             .hasClassSymbol(suspendClazz) && t.symbol.flags.isOneOf(Flags.GivenOrImplicit)
       }
 
-    tree match
+    val newParams = tree match
       case defDef: tpd.DefDef =>
-        (defDef
-          .paramss
-          .map(_.filterNot(isImplicitSuspend).asInstanceOf[tpd.ParamClause])
-          .filterNot(_.isEmpty)) ++ List(completionPC)
-      case _: tpd.ValDef => List(completionPC)
+        val transformed =
+          TreeTypeMap(
+            treeMap = {
+              case v: tpd.ValDef if isImplicitSuspend(v) =>
+                tpd.EmptyTree
+              case t =>
+                t
+            }
+          ).transformParamss(tree.asInstanceOf[tpd.DefDef].paramss).filterNot(_.isEmpty)
+        val lastIndex = transformed.size - 1
+        transformed.zipWithIndex.map {
+          case (l, index) if index == lastIndex => l.appended(completion).asInstanceOf[tpd.ParamClause]
+          case (l, _) => l.asInstanceOf[tpd.ParamClause]
+        }
+      case _: tpd.ValDef => List(List(completionPC)).asInstanceOf[List[tpd.ParamClause]]
+    println(s"newParams: $newParams")
+    tree match {
+      case defDef: tpd.DefDef =>
+        println(s"oldParams: ${defDef.paramss}")
+      case v: tpd.ValDef if v.symbol.paramSymss.nonEmpty =>
+        println(s"oldParams: ${v.symbol.paramSymss}")
+    }
+    newParams
+
   }
 
   private def transformSuspendContinuationBody(
@@ -217,15 +237,20 @@ object DefDefTransforms extends TreesChecks:
       owner.getOrElse(parent.owner),
       parent.name.asTermName,
       parent.flags | Flags.Method,
-      MethodType.fromSymbols(
-        transformedMethodParams.flatMap {
-          _.flatMap {
-            case p: tpd.ValDef => List(p.symbol)
-            case _: tpd.TypeDef => List.empty
-          }
-        },
-        returnType
-      ),
+      transformedMethodParams
+        .reverse
+        .foldLeft(Option.empty[MethodType]) { (acc, paramClause) =>
+          transformedMethodParams.map(_.map(_.show))
+          println(s"(acc, paramClause): ${(acc.map(_.show), paramClause.map(_.show))}")
+          acc
+            .map { mt =>
+              val newMt = MethodType.fromSymbols(paramClause.map(_.symbol), mt)
+              println(s"newMt: ${newMt.show}")
+              newMt
+            }
+            .orElse(Some(MethodType.fromSymbols(paramClause.map(_.symbol), returnType)))
+        }
+        .getOrElse(MethodType.fromSymbols(List.empty, returnType)),
       parent.privateWithin,
       parent.coord
     ).entered
@@ -397,7 +422,10 @@ object DefDefTransforms extends TreesChecks:
       tree.symbol.paramSymss.flatMap(_.filterNot(s => hasSuspendClass(s) || s.isTypeParam))
 
     val substituteContinuation = new TreeTypeMap(
-      treeMap = tree => if treeCallsSuspend(tree) then continuationBlock else tree,
+      treeMap = {
+        case tree if treeCallsSuspend(tree) => continuationBlock
+        case tree => tree
+      },
       substFrom = List(parent) ++ oldMethodParamSymbols ++ contextFunctionOwner.toList,
       substTo = List(transformedMethod.symbol) ++ transformedMethodParamSymbols ++
         List(transformedMethod.symbol),
@@ -669,8 +697,15 @@ object DefDefTransforms extends TreesChecks:
     val transformedMethod: tpd.DefDef =
       tpd.DefDef(sym = transformedMethodSymbol)
 
-    val transformedMethodCompletionParam = ref(
-      transformedMethod.termParamss.flatten.find(_.symbol.denot.matches(completion)).get.symbol)
+    val transformedMethodCompletionParam =
+      println(s"transformedMethod.termParamss: ${transformedMethod.termParamss}")
+      ref(
+        transformedMethod
+          .termParamss
+          .flatten
+          .find(_.symbol.denot.matches(completion))
+          .get
+          .symbol)
 
     val transformedMethodParamsWithoutCompletion =
       transformedMethod.termParamss.flatten.filterNot(_.symbol.denot.matches(completion))
@@ -922,8 +957,6 @@ object DefDefTransforms extends TreesChecks:
             ref($completion).select(termName("context"))
           )
 
-      val contOfReturnType = continuationClassRef.appliedTo(returnType)
-
       ClassDefWithParents(
         cls = continuationsStateMachineSymbol,
         constr = continuationsStateMachineConstructor,
@@ -953,38 +986,39 @@ object DefDefTransforms extends TreesChecks:
           continuationStateMachineClass.tpe).entered
 
       val completionMatch = {
-
+        /* ```
+         case x$0: ${contFsmClass} if x$0.$label & Integer.MinValue != 0 =>
+           x$0.$label = x$0.label - Integer.MinValue
+           x$0
+         ```*/
         val case11: tpd.CaseDef = {
           val param =
-            newSymbol(newParent, nme.x_0, Flags.Case | Flags.CaseAccessor, defn.AnyType).entered
+            newSymbol(
+              newParent,
+              nme.x_0,
+              Flags.Case | Flags.CaseAccessor,
+              continuationStateMachineClass.tpe
+            ).entered
 
-          val paramLabel =
-            ref(param)
-              .select(nme.asInstanceOf_)
-              .appliedToType(continuationStateMachineClass.tpe)
-              .select(labelVarParam)
+          val paramLabel = ref(param).select(labelVarParam)
 
           tpd.CaseDef(
-            tpd.Bind(param, tpd.EmptyTree),
+            tpd.Bind(param, tpd.Typed(ref(param), ref(continuationsStateMachineSymbol))),
             ref(param)
-              .select(nme.isInstanceOf_)
-              .appliedToType(continuationStateMachineClass.tpe)
-              .select(defn.Boolean_&&)
-              .appliedTo(
-                paramLabel
-                  .select(integerAND)
-                  .appliedTo(integerMin)
-                  .select(integerNE)
-                  .appliedTo(tpd.Literal(Constant(0x0)))),
+              .select(labelVarParam)
+              .select(integerAND)
+              .appliedTo(integerMin)
+              .select(integerNE)
+              .appliedTo(tpd.Literal(Constant(0x0))),
             tpd.Block(
-              List(
-                tpd.Assign(paramLabel, paramLabel.select(defn.Int_-).appliedTo(integerMin))
-              ),
+              List(tpd.Assign(paramLabel, paramLabel.select(defn.Int_-).appliedTo(integerMin))),
               ref(param)
             )
           )
         }
-
+        /* ```
+         case _ => new ${contFsmClass}($completion)
+        ```*/
         val case12 = tpd.CaseDef(
           Underscore(anyType),
           tpd.EmptyTree,

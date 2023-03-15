@@ -1,0 +1,185 @@
+@odersky We've changed the definitions to match some of the Strawman
+and literature, and we're in the process of making it match the strawman api. There is one exception in ours -- resume must be unit returning in order for the boundaries to work:
+
+`shift` -> `suspend`
+
+> Which code is transformed to allow suspensions
+And
+> How is effect polymorphism handled? As an example, can you still work with a single definition of map with the standard signature? And is its code transformed or not?
+
+
+A suspended definition is a `ValOrDefDef` that includes `Suspend` in a
+`ContextFunction` parameter position or in a `using`
+`ParameterClause`.
+
+E.g.
+
+```scala
+val suspendedFoo: (Suspend) => Int = ...
+def suspendedFooDef(using Suspend): Int = ...
+```
+
+Once a `ValOrDefDef` has been determined to be a suspended definition,
+if the RHS has no calls to `Suspend#shift`, then no transformation of
+the RHS occurs:
+
+```scala
+def constantSuspendedDefinition(i: Int)(using Suspend): Int = 1
+//becomes
+def constantSuspendedDefinition(i: Int, completion: Continuation[Int]): Int = 1
+```
+
+If only a single call to `Suspend.shift` occurs, then we install the
+`SafeContinuation`, which handles interception from the boundary
+completion continuation, allowing for scheduling, cancellation, and
+deferred completion. Otherwise, the code is normal:
+
+```scala
+def suspendsOneTime(i: Int)(using s:Suspend): Int = s.shift(continuation => continuation.resume(i + 1))
+//becomes
+def suspendsOneTime(i: Int, completion: Continuation[Int]): Any | Null | 
+  (continuations.Continuation.State.Suspended : continuations.Continuation.State) = 
+  val continuation1: continuations.Continuation[String] = completion
+  val safeContinuation: continuations.SafeContinuation[String] =
+    continuations.SafeContinuation.init[String](continuation1)
+  {
+    {
+      safeContinuation.resume(i.+(1))
+    }
+  }
+  safeContinuation.getOrThrow()
+```
+
+With two or more `shifts`, we generate a `Frame` class to hold the
+inputs, intermediate state, `Frame` "program counter", and invoke and
+interception machinery. Then we modify the suspended definition into a
+state machine, switching on the `Frame` program counter, inserting
+`CaseDef` clauses for each program counter in the suspended
+definition, with the same `SafeContinuation` calls as above:
+
+```scala
+def threeDependentContinuations(a: Int, b: Int, c: Int)(using s: Suspend): Int =
+    val d = 4
+    val continuationOne: Int = s.shift(_.resume(d + a))
+    val e = 5
+    val continuationTwo: Int = s.shift(_.resume(continuationOne + e + b))
+    val f = 6
+    val result: Int = s.shift(_.resume(continuationTwo + f + c))
+    result
+```
+
+becomes
+[this](https://gist.github.com/jackcviers/856c81cb46df028164777e7462638efc#file-threedependentcontinuationscompilertransformation-scala)
+
+Finally, calls to suspended definitions in source code are transformed
+to include the boundary continuation (THIS IS CURRENT WIP AND IS
+SUBJECT TO SMALL CHANGES):
+
+```scala
+blockingBoundary.createContinuation{
+  threeDepenedentContinuations(1,2,3)
+}
+
+//becomes
+val blockingBoundary = new BlockingBoundaryContinuation{}
+threeDependentContinuations(1,2,3, blockingBoundary)
+```
+
+```scala
+def suspendedDefCallsOtherSuspendedDef()(using Suspend): Int = otherSuspendedDef()
+// becomes
+def suspendedDefCallsOtherSuspendedDef(completion: Continuation[Int]): Int =
+  otherSuspendedDef(completion)
+```
+
+The only problem comes with HOFs. For that we need `async` and `await`
+and `awaitAll` for collections, or we need to reflect and reify other
+monads. These can be introduced as a library:
+
+```scala
+def mapExample()(using Suspend): List[Int] =
+  List(1,2,3).map(async{someSuspendedDef(_)).awaitAll // async returns Deferred[A], awaitAll waits until the deferreds all have resumed, or cancelled, an error in one cancels the others
+```
+
+We've also discussed the possibility of instrumenting all functions
+and switching between the slow-path functions that actually suspend
+and the uninstrumented version of the function at runtime with
+@b-studios.
+ 
+> How is the code transformed? CPS transform, state machines, capture/replay via exceptions, or something else?
+
+The code is CPS transformed implemented as a compiler phase. We use a
+Frame stack machine per suspended definition with a frame
+counter-based switch table, goto labels, and return from label.
+
+Boundaries are implemented as continuation objects and provide
+interception, scheduling, and cancellation. The default boundary is
+non-blocking -- that is if resume isn't called yet when control is
+returned to the calling function, the suspension point can return
+Suspended instead of the result type.
+
+Boundaries can also be blocking (automatic await behavior), or
+concurrent (return Deffered[A] results that have a blocking await
+method to retrieve the result or throw if the suspension was resumed
+with an error). Blocking and concurrent boundaries implement
+structured concurrency with cancellation.
+
+See above with the exact details.
+
+We're willing to discuss and experiment with other transformations --
+we've discussed some with @b-studios.
+
+> What is the performance degradation for transformed code vs direct style code if the code does in the end not suspend at runtime?
+>  And is it the same after the first suspension?
+
+
+I have run jmh benchmarks with:
+
+```
+[info] # JMH version: 1.32
+[info] # VM version: JDK 19, OpenJDK 64-Bit Server VM, 19+36-2238
+[info] # VM options: <none>
+[info] # Blackhole mode: full + dont-inline hint
+[info] # Warmup: 5 iterations, 10 s each
+[info] # Measurement: 5 iterations, 10 s each
+[info] # Timeout: 10 min per iteration
+[info] # Threads: 1 thread, will synchronize iterations
+[info] # Benchmark mode: Throughput, ops/time
+``` 
+
+
+So, overhead of suspension vs raw scala code, and overhead of raw
+scala code called after suspension
+
+```scala
+def SuspendedScalaCode =
+  def suspendedScalaCode(a: Int, b: Int, c: Int)(using s: Suspend): Int =
+    s.shift(_.resume(a + b + c))
+  suspendedScalaCode(1,2,3)
+
+def PassthroughAfterFirstSuspension =
+  def passthroughAfterFirstSuspension(a: Int, b: Int, c: Int)(using s:Suspend): Int =
+    val x = s.shift[Int](_.resume(a + b))
+    x + c
+  passthroughAfterFirstSuspension(1,2,3)
+
+def Passthrough =
+  def passthrough(a: Int, b: Int, c: Int)(using Suspend): Int =
+    a + b + c
+  passthrough(1, 2, 3)
+
+def MeasureRawScala =
+  def rawScala(a:Int, b: Int, c: Int): Int = a + b + c
+  rawScala(1,2,3)
+```
+
+We determine the overhead of scala code after suspend by measuring the
+overhead of SuspendedScalaCode and RawScala, then
+PassthroughAfterFirstSuspension and RawScala, then measuring the
+difference.
+
+| Overhead Type                                 | Percentage Overhead |
+|:----------------------------------------------|--------------------:|
+|suspended without suspend overhead		| 0.47% |
+|suspension overhead				| 92.79%  |
+|regular scala code after suspension overhead	| 2.08% |

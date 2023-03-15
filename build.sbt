@@ -15,6 +15,8 @@ addCommandAlias("ci-publish", "github; ci-release")
 
 publish / skip := true
 
+logBuffered := false
+
 lazy val root = // I
   (project in file("./")).aggregate(
     benchmarks, // A
@@ -31,7 +33,9 @@ lazy val root = // I
     // `zero-arguments-one-continuation-code-before-used-after`,
     // `list-map`,
     // `two-arguments-two-continuations`,
-    `munit-snap`
+    `munit-snap`,
+    `suspend-in-lambda`,
+    `test-nested-continuations`
   )
 
 lazy val bypassZinc = (project in file("./bypassZinc")).aggregate(
@@ -43,6 +47,12 @@ lazy val bypassZinc = (project in file("./bypassZinc")).aggregate(
 )
 
 lazy val `scala-fx` = project.settings(scalafxSettings: _*)
+
+lazy val `test-nested-continuations` = project
+  .in(file("./test-nested-continuations"))
+  .settings(continuationsPluginExampleShowTreeSettings)
+  .settings(forceCompilation := false)
+  .enablePlugins(ForceableCompilationPlugin).dependsOn(continuationsPlugin)
 
 lazy val continuationsPlugin = project
   .configs(IntegrationTest)
@@ -57,6 +67,10 @@ lazy val continuationsPluginExample = project
     continuationsPluginExampleSettings: _*
   )
   .enablePlugins(ForceableCompilationPlugin)
+
+lazy val `suspend-in-lambda` = (project in file("./suspend-in-lambda"))
+  .settings(continuationsPluginExampleShowTreeSettings: _*)
+  .dependsOn(continuationsPlugin)
 
 lazy val `zero-arguments-no-continuation-treeview` =
   (project in file("./zero-arguments-no-continuation-treeview"))
@@ -82,7 +96,16 @@ lazy val `two-arguments-two-continuations` =
     .enablePlugins(ForceableCompilationPlugin)
 
 lazy val benchmarks =
-  project.dependsOn(`scala-fx`).settings(publish / skip := true).enablePlugins(JmhPlugin)
+  project
+    .dependsOn(`scala-fx`, continuationsPlugin)
+    .settings(
+      publish / skip := true,
+      libraryDependencies += catsEffect // libraryDependencies += zio
+      // libraryDependencies += kyo
+      // , libraryDependencies += oxd
+    )
+    .settings(continuationsPluginExampleSettings)
+    .enablePlugins(JmhPlugin)
 
 lazy val documentation = project
   .dependsOn(`scala-fx`)
@@ -169,6 +192,7 @@ lazy val continuationsPluginSettings: Seq[Def.Setting[_]] =
     libraryDependencies ++= List(
       "org.scala-lang" %% "scala3-compiler" % "3.1.2"
     ) ++ testAndIntegrationTest(munit),
+    Test / scalacOptions += "-Ydebug:continuations",
     Test / javaOptions += {
       val `scala-compiler-classpath` =
         (Compile / dependencyClasspath)
@@ -179,7 +203,7 @@ lazy val continuationsPluginSettings: Seq[Def.Setting[_]] =
       s"-Dscala-compiler-classpath=${`scala-compiler-classpath`}"
     },
     Test / javaOptions += {
-      s"""-Dcompiler-scalacOptions=\"${scalacOptions.value.mkString(" ")}\""""
+      s"""-Dcompiler-scalacOptions=\"${(Test / scalacOptions).value.mkString(" ")}\""""
     },
     Test / javaOptions += Def.taskDyn {
       Def.task {
@@ -195,14 +219,16 @@ lazy val continuationsPluginSettings: Seq[Def.Setting[_]] =
 
 lazy val continuationsPluginExampleShowTreeSettings: Seq[Def.Setting[_]] =
   Seq(
+    fork := false,
     publish / skip := true,
     autoCompilerPlugins := true,
     resolvers += Resolver.mavenLocal,
     forceCompilation := true,
     Compile / scalacOptions += s"-Xplugin:${(continuationsPlugin / Compile / packageBin).value}",
-    Compile / scalacOptions += "-Xprint:continuationsCallsPhase",
+    Compile / scalacOptions += "-Ydebug:continuations",
+    Compile / scalacOptions += "-Xprint:all",
     Test / scalacOptions += s"-Xplugin:${(continuationsPlugin / Compile / packageBin).value}",
-    Test / scalacOptions += "-Xprint:continuationsCallsPhase"
+    Test / scalacOptions += "-Xprint:repeatableAnnotations"
   )
 
 lazy val continuationsPluginExampleSettings: Seq[Def.Setting[_]] =
